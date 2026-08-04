@@ -80,7 +80,7 @@ const sendOtpEmail = async (to, otp, purpose) => {
     `;
 
     await transporter.sendMail({
-        from: `"Mini CRM" <${process.env.SMTP_MAIL}>`,
+        from: `"Mini CRM" <${process.env.SMTP_FROM || process.env.SMTP_MAIL}>`,
         to,
         subject,
         html,
@@ -149,7 +149,7 @@ const sendPasswordResetEmail = async (to, resetLink) => {
     `;
 
     await transporter.sendMail({
-        from: `"Mini CRM" <${process.env.SMTP_MAIL}>`,
+        from: `"Mini CRM" <${process.env.SMTP_FROM || process.env.SMTP_MAIL}>`,
         to,
         subject: 'Reset your Mini CRM password',
         html,
@@ -225,7 +225,7 @@ const sendInvitationEmail = async (to, { inviterName, workspaceName, role, setPa
     `;
 
     await transporter.sendMail({
-        from: `"Mini CRM" <${process.env.SMTP_MAIL}>`,
+        from: `"Mini CRM" <${process.env.SMTP_FROM || process.env.SMTP_MAIL}>`,
         to,
         subject: `You've been invited to join ${workspaceName} on Mini CRM`,
         html,
@@ -291,7 +291,7 @@ const sendWorkspaceAddedEmail = async (to, { inviterName, workspaceName, role, l
     `;
 
     await transporter.sendMail({
-        from: `"Mini CRM" <${process.env.SMTP_MAIL}>`,
+        from: `"Mini CRM" <${process.env.SMTP_FROM || process.env.SMTP_MAIL}>`,
         to,
         subject: `You've been added to ${workspaceName} on Mini CRM`,
         html,
@@ -368,7 +368,7 @@ const sendOwnershipTransferOtpEmail = async (to, { workspaceName, newOwnerName, 
     `;
 
     await transporter.sendMail({
-        from: `"Mini CRM" <${process.env.SMTP_MAIL}>`,
+        from: `"Mini CRM" <${process.env.SMTP_FROM || process.env.SMTP_MAIL}>`,
         to,
         subject: `Confirm ownership transfer for ${workspaceName}`,
         html,
