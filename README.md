@@ -1,12 +1,29 @@
+<div align="center">
+
 # Mini CRM
 
-A full-stack, multi-workspace CRM system for managing leads, teams, and sales pipelines — with real-time updates, role-based access control (including ownership transfer), activity compliance logging, analytics dashboard, email notifications, and a public API for external lead submission.
+**Multi-workspace CRM for lead and sales-pipeline management — workspace-scoped RBAC, real-time updates, compliance activity logging, email OTP authentication, and a public lead-submission API.**
+
+[![Live App](https://img.shields.io/badge/Live_App-Vercel-000000?style=for-the-badge&logo=vercel&logoColor=fff)](https://crm-platform-delta-ten.vercel.app)
+[![API](https://img.shields.io/badge/API-Node.js_%2B_Express-339933?style=for-the-badge&logo=nodedotjs&logoColor=fff)](./server)
+[![Frontend](https://img.shields.io/badge/Frontend-React_%2B_Vite-61DAFB?style=for-the-badge&logo=react&logoColor=000)](./client)
+[![Database](https://img.shields.io/badge/Database-PostgreSQL-4169E1?style=for-the-badge&logo=postgresql&logoColor=fff)](./server/prisma/schema.prisma)
+
+</div>
+
+---
+
+## Overview
+
+Mini CRM is a multi-tenant CRM built for small sales teams. Each user can belong to multiple **workspaces**, and each workspace has its own isolated set of leads, members, and compliance activity logs. Leads can be submitted externally via an API key, tracked through a full pipeline, assigned to team members, and commented on — all with a live-updating dashboard and an admin-only analytics view.
+
+**Stack:** Node.js, Express, Prisma, PostgreSQL, Socket.IO, JWT, Zod, React 18, Vite, Redux Toolkit, React Router v7.
 
 ---
 
 ## Table of Contents
 
-- [Overview](#overview)
+- [Feature Overview](#feature-overview)
 - [Tech Stack](#tech-stack)
 - [Project Structure](#project-structure)
 - [Features](#features)
@@ -16,13 +33,8 @@ A full-stack, multi-workspace CRM system for managing leads, teams, and sales pi
   - [Installation](#installation)
   - [Running the App](#running-the-app)
   - [Database Setup](#database-setup)
+- [Deployment](#deployment)
 - [API Reference](#api-reference)
-  - [Authentication](#authentication)
-  - [Leads](#leads)
-  - [Workspaces](#workspaces)
-  - [Users](#users)
-  - [Logs](#logs)
-  - [Public API](#public-api)
 - [Data Models](#data-models)
 - [Role System](#role-system)
 - [Real-Time Events (Socket.IO)](#real-time-events-socketio)
@@ -31,9 +43,53 @@ A full-stack, multi-workspace CRM system for managing leads, teams, and sales pi
 
 ---
 
-## Overview
+## Feature Overview
 
-Mini CRM is a multi-tenant CRM built for small sales teams. Each user can belong to multiple **workspaces**, and each workspace has its own isolated set of leads, members, and compliance activity logs. Leads can be submitted externally via an API key, tracked through a full pipeline, assigned to team members, and commented on — all with a live-updating dashboard and an admin-only analytics view.
+### 1) Authentication & Sessions
+- JWT authentication with access and refresh tokens.
+- Two-step login: password, then a 6-digit OTP delivered by email.
+- Single active session per user — a new login evicts the previous device over WebSocket.
+- Forgot / reset password via time-limited emailed token.
+- Passwords hashed with bcrypt.
+
+### 2) Multi-Workspace Tenancy
+- A user can own or belong to any number of workspaces.
+- Leads, members, and activity logs are fully isolated per workspace.
+- Auto-generated unique slug and 48-character API key per workspace.
+- Workspace switching without re-login.
+- Ownership transfer confirmed by an OTP sent to the current owner.
+
+### 3) Lead Lifecycle
+- Sequential per-workspace IDs in `LD0001` format, derived from `MAX()` so deletions never produce duplicates.
+- Status: `New → Contacted → In Progress → Closed / Rejected`.
+- Priority: `Low`, `Medium`, `High`, `Urgent`.
+- Assignment, follow-up scheduling, DIP account state, and mobile-verification state.
+- Soft delete with restore — removed leads move to `deleted_leads` and their ID stays reserved.
+
+### 4) Role-Based Access Control
+- Four workspace roles: `owner`, `admin`, `editor`, `viewer`.
+- Enforced server-side by `workspaceGuard` (membership + role injection) and `roleGuard`.
+- The frontend hides what a role cannot do, but authorization is decided at the API layer.
+- Full matrix in [Role System](#role-system).
+
+### 5) Compliance Activity Logging
+- Every mutation is recorded with actor, field-level old and new values, and IP address.
+- Logs are never deleted. When a lead is removed its `leadId` becomes `null` and `leadRef` retains the human-readable ID, so the audit trail survives.
+- Filterable by date range, action type, user, and lead.
+
+### 6) Real-Time Updates
+- Socket.IO rooms scoped per workspace, authenticated by JWT during the handshake.
+- Lead create / update / delete broadcast to every connected member.
+- Invitations, ownership transfers, and forced logouts delivered live.
+
+### 7) Public Lead Submission API
+- External sites can POST leads with no user session.
+- Authenticated by workspace API key.
+- Rate limited to 10 requests per minute per IP.
+
+### 8) Analytics
+- Admin-only dashboard: status donut, priority bars, verification and DIP splits, six-month trend line, and a top-performer leaderboard.
+- Aggregations run in SQL, not in application memory.
 
 ---
 
@@ -48,7 +104,7 @@ Mini CRM is a multi-tenant CRM built for small sales teams. Each user can belong
 | Socket.IO | Real-time WebSocket events |
 | JSON Web Tokens (JWT) | Authentication |
 | bcryptjs | Password hashing |
-| Nodemailer (Office365 SMTP) | Password reset, invitations, OTP emails |
+| Nodemailer / Brevo | OTP, password reset, and invitation emails |
 | Zod | Request schema validation |
 | Helmet | HTTP security headers |
 | express-rate-limit | Rate limiting |
@@ -69,14 +125,15 @@ Mini CRM is a multi-tenant CRM built for small sales teams. Each user can belong
 
 ## Project Structure
 
-```
-democrm/
+```text
+crm-platform/
 ├── client/                          # React frontend
-│   ├── .env                         # VITE_API_URL, VITE_WS_URL
+│   ├── .env.example                 # VITE_API_URL, VITE_WS_URL
+│   ├── vercel.json                  # SPA rewrite — all paths serve index.html
 │   └── src/
 │       ├── api/
 │       │   ├── axios.js             # Axios instance with JWT + workspace interceptors
-│       │   └── socket.js            # Socket.IO singleton client (falls back to window.location.host)
+│       │   └── socket.js            # Socket.IO singleton client
 │       ├── components/
 │       │   ├── KpiCards.jsx         # Dashboard stat cards
 │       │   ├── Layout.jsx           # App shell with sidebar
@@ -93,23 +150,27 @@ democrm/
 │       │   ├── DashboardPage.jsx    # Main lead management view
 │       │   ├── ForgotPasswordPage.jsx
 │       │   ├── LoginPage.jsx
-│       │   ├── LogsPage.jsx         # Activity audit logs (compliance — logs survive lead deletion)
+│       │   ├── LogsPage.jsx         # Activity audit logs (survive lead deletion)
+│       │   ├── OtpPage.jsx          # Second login step
+│       │   ├── ProfilePage.jsx
 │       │   ├── ResetPasswordPage.jsx
 │       │   ├── SignupPage.jsx
 │       │   ├── WorkspacesPage.jsx   # Workspace switcher
 │       │   ├── CreateWorkspacePage.jsx
-│       │   ├── UsersPage.jsx        # Member management with owner/admin/editor/viewer badges
+│       │   ├── UsersPage.jsx        # Member management with role badges
 │       │   └── WorkspaceSettingsPage.jsx  # Includes ownership transfer via OTP
 │       └── store/
 │           ├── index.js             # Redux store
 │           └── slices/
 │               ├── authSlice.js
 │               ├── leadSlice.js     # Leads, KPI stats, analytics, socket handlers
+│               ├── deletedLeadSlice.js
 │               ├── logSlice.js
 │               ├── userSlice.js
 │               └── workspaceSlice.js
 │
 └── server/                          # Express backend
+    ├── .env.example
     ├── prisma/
     │   └── schema.prisma            # Prisma schema (PostgreSQL)
     └── src/
@@ -117,7 +178,7 @@ democrm/
         ├── config/
         │   └── db.js                # Prisma client singleton
         ├── controllers/
-        │   ├── authController.js    # login, signup, forgot/reset password
+        │   ├── authController.js    # login, signup, OTP, forgot/reset password
         │   ├── leadController.js    # CRUD + analytics
         │   ├── logController.js
         │   ├── userController.js
@@ -137,7 +198,7 @@ democrm/
         │   ├── rateLimiter.js       # Rate limiting rules
         │   └── errorHandler.js      # Global error handler
         ├── services/
-        │   ├── emailService.js      # Nodemailer — password reset, invite, OTP emails
+        │   ├── emailService.js      # Transactional email templates + delivery
         │   ├── leadService.js       # Lead business logic + analytics aggregation
         │   └── logService.js        # Activity log business logic
         └── validators/
@@ -151,8 +212,8 @@ democrm/
 
 ### Authentication & Sessions
 - JWT-based login with configurable expiry + refresh token support
-- **Session conflict detection** — logging in from a new device notifies and optionally evicts the old session via WebSocket
-- Force-login flag to override existing sessions
+- Email OTP as the second login step — a 6-digit code valid for 10 minutes
+- **Session conflict detection** — logging in from a new device notifies and evicts the old session via WebSocket
 - **Forgot password** — sends a time-limited reset link to the user's email
 - **Reset password** — token-validated password reset via email link
 - bcrypt password hashing
@@ -176,6 +237,7 @@ democrm/
 - Full-text search across name, mobile, and lead ID
 - Filter by status, priority, assigned user
 - Paginated results with configurable page size
+- Soft delete with restore — deleted leads keep their reserved ID
 
 ### Notes & Mobile Verification Popover
 - Clicking the notes icon in any table row opens a floating panel
@@ -219,6 +281,8 @@ democrm/
 - PostgreSQL 14+ (local, Docker, or a hosted provider such as Neon)
 - A transactional email account (Brevo, Postmark, SendGrid, or any SMTP host)
 
+> Email is not optional. Every login sends a one-time code, so an account that cannot send mail is an account that cannot sign in.
+
 ### Environment Variables
 
 **`server/.env`**
@@ -229,7 +293,7 @@ PORT=5003
 # Prisma / PostgreSQL
 DATABASE_URL=postgresql://<user>:<password>@<host>:5432/<database>?sslmode=require
 
-# JWT
+# JWT — generate each with: openssl rand -hex 32
 JWT_SECRET=replace_with_a_long_random_string
 JWT_REFRESH_SECRET=replace_with_another_long_random_string
 
@@ -271,7 +335,7 @@ VITE_API_URL=
 VITE_WS_URL=http://localhost:5003
 ```
 
-> In production set `VITE_API_URL=https://your-backend-domain.com` and `VITE_WS_URL=https://your-backend-domain.com`.
+> In production set `VITE_API_URL` and `VITE_WS_URL` to your deployed backend origin. Vite inlines these at **build** time — changing them in a hosting dashboard does nothing until you rebuild.
 
 ### Installation
 
@@ -311,9 +375,23 @@ npx prisma db push
 npx prisma studio
 ```
 
-> `db push` is the quickest way to get a schema in place. For a change history you
-> can review and roll back, use `npx prisma migrate dev` instead — PostgreSQL supports
-> the shadow database it needs.
+> `db push` is the quickest way to get a schema in place. For a change history you can review and roll back, use `npx prisma migrate dev` instead — PostgreSQL supports the shadow database it needs.
+
+There is no seed script. Create the first account through the signup screen — the first user to create a workspace becomes its owner.
+
+---
+
+## Deployment
+
+The app is two deployable pieces plus a database. Anything that runs Node and speaks PostgreSQL will host it.
+
+| Piece | Directory | Requirement |
+|---|---|---|
+| API | `server/` | Long-running Node process |
+| Web | `client/` | Static file host |
+| Database | — | PostgreSQL 14+ |
+
+Full instructions, including the two failure modes worth knowing about — hosts that block outbound SMTP, and the SPA rewrite deep links need — are in **[DEPLOY_GUIDE.md](./DEPLOY_GUIDE.md)**.
 
 ---
 
@@ -327,13 +405,17 @@ All protected endpoints require:
 
 | Method | Endpoint | Description | Auth |
 |---|---|---|---|
-| POST | `/api/auth/login` | Login and receive JWT | Public |
-| POST | `/api/auth/signup` | Self-register | Public |
+| POST | `/api/auth/login` | Validate credentials, send OTP | Public |
+| POST | `/api/auth/signup` | Self-register, send OTP | Public |
+| POST | `/api/auth/verify-otp` | Exchange OTP for JWT | Public |
+| POST | `/api/auth/resend-otp` | Reissue a verification code | Public |
 | GET | `/api/auth/me` | Get current user + workspaces | Required |
 | POST | `/api/auth/logout` | Invalidate session token | Required |
 | POST | `/api/auth/forgot-password` | Send password reset email | Public |
 | POST | `/api/auth/reset-password` | Reset password via token | Public |
 | POST | `/api/auth/refresh` | Refresh access token | Public (refresh token) |
+| PATCH | `/api/auth/profile` | Update own profile | Required |
+| PATCH | `/api/auth/change-password` | Change own password | Required |
 
 ---
 
@@ -346,10 +428,12 @@ All routes require auth + workspace membership.
 | GET | `/api/leads` | List leads (paginated, filterable) | All |
 | GET | `/api/leads/stats` | Dashboard KPI stats | All |
 | GET | `/api/leads/analytics` | Full analytics aggregation | Admin / Owner |
+| GET | `/api/leads/deleted` | List soft-deleted leads | Admin / Owner |
 | GET | `/api/leads/:id` | Get single lead | All |
 | POST | `/api/leads` | Create lead | Admin / Owner |
 | PUT | `/api/leads/:id` | Update lead | Admin / Owner / Editor (assigned) |
-| DELETE | `/api/leads/:id` | Delete lead | Admin / Owner |
+| DELETE | `/api/leads/:id` | Soft-delete lead | Admin / Owner |
+| POST | `/api/leads/:id/restore` | Restore a deleted lead | Admin / Owner |
 | PUT | `/api/leads/:id/assign` | Assign lead to user | Admin / Owner |
 | POST | `/api/leads/:id/notes` | Add note to lead | Admin / Owner / Editor |
 
@@ -369,6 +453,7 @@ page=1&limit=20&status=New&priority=High&assignedTo=<userId>&search=<text>
 | GET | `/api/workspaces/:id` | Get workspace details | Member |
 | POST | `/api/workspaces/:id/invite` | Invite member by email | Admin / Owner |
 | PATCH | `/api/workspaces/:id/members/:userId/role` | Change member role | Admin / Owner (see Role System) |
+| GET | `/api/workspaces/:id/members/:userId/removal-preview` | Preview impact of removing a member | Admin / Owner |
 | DELETE | `/api/workspaces/:id/members/:userId` | Remove member | Admin / Owner |
 | PATCH | `/api/workspaces/:id/settings` | Update webhook / regenerate API key | Admin / Owner |
 | POST | `/api/workspaces/:id/transfer-ownership/request` | Initiate ownership transfer (sends OTP) | Owner only |
@@ -398,7 +483,7 @@ page=1&limit=20&status=New&priority=High&assignedTo=<userId>&search=<text>
 page=1&limit=20&actionType=Status+Changed&userId=<id>&startDate=2024-01-01&endDate=2024-12-31
 ```
 
-> Logs for deleted leads are retained with `leadId = null`. The `oldValue` field preserves the lead's ID, name, and mobile at the time of deletion.
+> Logs for deleted leads are retained with `leadId = null`. The `leadRef` and `oldValue` fields preserve the lead's ID, name, and mobile at the time of deletion.
 
 ---
 
@@ -429,6 +514,9 @@ email               String    required, unique
 password            String    hashed with bcrypt
 isActive            Boolean   default: true
 activeSessionToken  String    tracks current login session
+otp                 String?   6-digit login / signup code
+otpExpiry           DateTime? code expiry
+isEmailVerified     Boolean   default: false
 resetToken          String?   password reset token
 resetTokenExpiry    DateTime? reset token expiry
 ```
@@ -471,12 +559,27 @@ dipAccount      pending | created
 verifiedMobile  Boolean   default: false
 ```
 
+### DeletedLead
+```
+workspaceId       Int       FK → Workspace
+leadId            String    the reserved LD0001 identifier
+notesJson         String?   JSON snapshot of lead_notes at deletion time
+originalCreatedAt DateTime
+deletedAt         DateTime
+deletedBy         Int?      FK → User
+```
+
+> Soft-deleted leads are copied here and restored from here. The `leadId` stays reserved permanently — ID generation checks this table so a number is never reused.
+
 ### ActivityLog
 ```
 actionType    Lead Created | Lead Assigned | Status Changed | Priority Changed
-              Note Added | Lead Updated | Lead Deleted | DIP Account Changed | Mobile Verified
+              Note Added | Lead Updated | Lead Deleted | Lead Restored
+              DIP Account Changed | Mobile Verified | Member Invited
+              Member Removed | Role Changed
 performedBy   Int?      FK → User (null for public API)
 leadId        Int?      FK → Lead — nullable so logs survive lead deletion
+leadRef       String?   human-readable lead number, survives deletion
 oldValue      String?
 newValue      String?
 ipAddress     String?
@@ -502,6 +605,7 @@ createdAt   DateTime
 | Update any lead | Yes | Yes | No | No |
 | Update assigned lead | Yes | Yes | Yes | No |
 | Delete lead | Yes | Yes | No | No |
+| Restore deleted lead | Yes | Yes | No | No |
 | Assign lead | Yes | Yes | No | No |
 | Add note | Yes | Yes | Yes (assigned) | No |
 | Toggle mobile verified | Yes | Yes | Yes (assigned) | No |
@@ -546,6 +650,8 @@ const socket = io(SERVER_URL, {
 });
 ```
 
+The handshake is rejected if the token is missing or invalid — the connection never reaches the event handlers.
+
 ---
 
 ## Frontend Architecture
@@ -556,6 +662,7 @@ const socket = io(SERVER_URL, {
 |---|---|
 | `authSlice` | User identity, JWT token, session conflict state |
 | `leadSlice` | Lead list, KPI stats, analytics data, pagination, filters, socket handlers |
+| `deletedLeadSlice` | Soft-deleted leads and restore actions |
 | `workspaceSlice` | Current workspace, all user workspaces |
 | `userSlice` | Workspace member list and management |
 | `logSlice` | Activity logs, paginated and per-lead |
@@ -565,13 +672,16 @@ const socket = io(SERVER_URL, {
 ```
 /login                  Public
 /signup                 Public
+/verify-otp             Public
 /forgot-password        Public
 /reset-password         Public (token in query string)
 /workspace/create       Auth required
 /                       Auth + workspace required  (Dashboard)
+/profile                Auth + workspace required
 /workspaces             Auth + workspace required
 /analytics              Admin / Owner only
 /logs                   All workspace members
+/users                  Admin / Owner only
 /workspace/settings     Admin / Owner only
 /workspace/api-webhook  Admin / Owner only
 ```
@@ -579,10 +689,10 @@ const socket = io(SERVER_URL, {
 ### Axios Interceptors
 
 Every outgoing request automatically attaches:
-- `Authorization: Bearer <token>` from Redux state
+- `Authorization: Bearer <token>` from localStorage
 - `x-workspace-id: <id>` from localStorage
 
-On a `401` response, the user is redirected to `/login` and state is cleared.
+On a `401` the client attempts a single token refresh and retries the original request. If the refresh also fails, local state is cleared and the user is redirected to `/login`.
 
 ---
 
@@ -607,3 +717,15 @@ cd client && npm run dev
 # Build frontend for production
 cd client && npm run build
 ```
+
+---
+
+<div align="center">
+
+**Developed by [Asjad Farooq](https://www.linkedin.com/in/asjadfarooqconnect)**
+
+[![GitHub](https://img.shields.io/badge/GitHub-Asjadfaroq-181717?style=flat-square&logo=github)](https://github.com/Asjadfaroq/crm-platform)
+[![LinkedIn](https://img.shields.io/badge/LinkedIn-Asjad_Farooq-0A66C2?style=flat-square&logo=linkedin&logoColor=fff)](https://www.linkedin.com/in/asjadfarooqconnect)
+[![Live App](https://img.shields.io/badge/Live_App-Mini_CRM-000000?style=flat-square&logo=vercel&logoColor=fff)](https://crm-platform-delta-ten.vercel.app)
+
+</div>
