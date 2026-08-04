@@ -1,433 +1,245 @@
 # Mini CRM — Deployment Guide
 
-## Table of Contents
+The app is two deployable pieces plus a database:
+
+| Piece | Directory | What it is |
+|---|---|---|
+| API | `server/` | Express + Prisma + Socket.IO, needs a long-running Node process |
+| Web | `client/` | Vite build, static files |
+| Database | — | PostgreSQL 14+ |
+
+Anything that runs Node and speaks PostgreSQL will host this. The walkthrough below
+uses Neon, Render, and Vercel because all three have a usable free tier, but nothing
+in the code is tied to them.
+
+---
+
+## Contents
 
 1. [Prerequisites](#1-prerequisites)
-2. [Environment Variables](#2-environment-variables)
-3. [Local Development](#3-local-development)
-4. [Database Setup](#4-database-setup)
-5. [Production Build](#5-production-build)
-6. [Deployment Options](#6-deployment-options)
-   - [Option A — Single VPS / Ubuntu Server (Nginx)](#option-a--single-vps--ubuntu-server-nginx)
-   - [Option B — Railway](#option-b--railway)
-   - [Option C — Render](#option-c--render)
-   - [Option D — Vercel (Frontend) + Railway (Backend)](#option-d--vercel-frontend--railway-backend)
-7. [Post-Deployment Checklist](#7-post-deployment-checklist)
-8. [Troubleshooting](#8-troubleshooting)
+2. [Environment variables](#2-environment-variables)
+3. [Local development](#3-local-development)
+4. [Database setup](#4-database-setup)
+5. [Deploying](#5-deploying)
+6. [Post-deployment checklist](#6-post-deployment-checklist)
+7. [Troubleshooting](#7-troubleshooting)
 
 ---
 
 ## 1. Prerequisites
 
-| Tool | Minimum Version | Notes |
-|------|----------------|-------|
-| Node.js | 18.x | LTS recommended |
+| Tool | Minimum | Notes |
+|---|---|---|
+| Node.js | 18.x | 20.x LTS recommended |
 | npm | 9.x | Ships with Node 18 |
-| SQL Server | 2019+ or Azure SQL | Azure SQL Basic tier is sufficient for production |
-| SMTP account | — | Office365, Gmail, or SendGrid for email delivery |
-| Git | any | For cloning the repo |
+| PostgreSQL | 14 | Local, Docker, or hosted |
+| Email provider | — | Brevo, Postmark, SendGrid, or any SMTP host |
+
+Email is not optional. Every login sends a one-time code, so an account that cannot
+send mail is an account that cannot sign in.
 
 ---
 
-## 2. Environment Variables
+## 2. Environment variables
 
-### Server (`server/.env`)
-
-Create `server/.env`. **Never commit this file.**
+### `server/.env`
 
 ```env
-# ─── Server ───────────────────────────────────────────────────────────────────
 PORT=5003
-NODE_ENV=production
 
-# ─── Database (Prisma / SQL Server) ──────────────────────────────────────────
-# Local SQL Server Express example:
-# DATABASE_URL=sqlserver://localhost:1433;database=minicrm;user=sa;password=pass;instanceName=SQLEXPRESS;trustServerCertificate=true;encrypt=false
+# ─── Database ─────────────────────────────────────────────────────────────────
+DATABASE_URL=postgresql://USER:PASSWORD@HOST:5432/DBNAME?sslmode=require
 
-# Azure SQL example:
-DATABASE_URL=sqlserver://<server>.database.windows.net:1433;database=<dbname>;user=<user>@<server>;password=<pass>;encrypt=true;trustServerCertificate=false
+# ─── JWT — generate each with: openssl rand -hex 32 ───────────────────────────
+JWT_SECRET=
+JWT_REFRESH_SECRET=
 
-# ─── JWT ──────────────────────────────────────────────────────────────────────
-JWT_SECRET=replace_with_a_long_random_string_at_least_32_chars
-JWT_REFRESH_SECRET=replace_with_another_long_random_string
+# ─── Public API key (sent in the x-api-key header) ────────────────────────────
+API_KEY=
 
-# ─── Public API key ───────────────────────────────────────────────────────────
-API_KEY=your_public_api_key
+# ─── Frontend origin — used in email links and CORS ───────────────────────────
+CLIENT_URL=http://localhost:5173
+ALLOWED_ORIGINS=http://localhost:5173,http://localhost:3000
 
-# ─── Frontend origin — used in password reset and OTP email links ─────────────
-CLIENT_URL=https://your-frontend-domain.com
-
-# ─── CORS — comma-separated list of allowed frontend origins ─────────────────
-ALLOWED_ORIGINS=https://your-frontend-domain.com
-
-# ─── SMTP (Office365 example) ─────────────────────────────────────────────────
-SMTP_SERVICE=smtp.office365.com
+# ─── Email ────────────────────────────────────────────────────────────────────
+SMTP_SERVICE=smtp-relay.brevo.com
 SMTP_PORT=587
 SMTP_SECURE=false
-SMTP_MAIL=yourmail@example.com
-SMTP_PASSWORD=yourpassword
+SMTP_MAIL=your_smtp_login
+SMTP_PASSWORD=your_smtp_key
+SMTP_FROM=you@example.com          # must be a verified sender
+
+# Set only on hosts that block outbound SMTP — see §7. Delivers over HTTPS instead.
+BREVO_API_KEY=
+
+# ─── Optional branding ────────────────────────────────────────────────────────
+APP_NAME=Mini CRM
+SUPPORT_EMAIL=
 ```
 
-> Generate strong secrets with:
-> ```bash
-> node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
-> ```
+`SMTP_MAIL` is the login; `SMTP_FROM` is the address recipients see. Most providers
+reject mail sent from an unverified `From`, so these are usually different values.
 
-### Client (`client/.env`)
+### `client/.env`
 
 ```env
-# Backend API base URL
-# Dev: leave empty — Vite proxy forwards /api to the dev server
-# Prod: set to your backend origin
-VITE_API_URL=https://your-backend-domain.com
-
-# Backend URL for Socket.IO
-# Dev: full URL of the local backend
-# Prod: full URL of the production backend
-VITE_WS_URL=https://your-backend-domain.com
+VITE_API_URL=              # empty in dev — the Vite proxy forwards /api
+VITE_WS_URL=http://localhost:5003
 ```
 
-> If `VITE_WS_URL` is not set, the Socket.IO client automatically falls back to `window.location.host`, which works when the frontend and backend share the same domain.
+In production set both to the deployed API origin.
+
+> Vite inlines `VITE_*` variables at **build** time, not run time. Changing one in a
+> hosting dashboard does nothing until you rebuild.
 
 ---
 
-## 3. Local Development
+## 3. Local development
 
 ```bash
-# 1. Clone the repository
-git clone <repo-url> democrm
-cd democrm
+# Terminal 1
+cd server && npm install && npm run dev
 
-# 2. Install dependencies
-cd server && npm install
-cd ../client && npm install
-
-# 3. Configure environment
-# Create server/.env and fill in your local SQL Server values
-
-# 4. Push Prisma schema to your local database
-cd server
-npx prisma db push
-
-# 5. Start the backend (port 5003)
-npm run dev
-
-# 6. In a new terminal — start the frontend (port 5173)
-cd ../client
-npm run dev
+# Terminal 2
+cd client && npm install && npm run dev
 ```
 
-Open `http://localhost:5173`. API calls are proxied to `http://localhost:5003` via Vite.
+API on `http://localhost:5003`, web on `http://localhost:5173`.
+
+A local PostgreSQL via Docker, if you need one:
+
+```bash
+docker run -d --name crm-postgres \
+  -e POSTGRES_PASSWORD=postgres -p 5432:5432 postgres:16
+```
+
+```env
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/postgres?schema=public
+```
 
 ---
 
-## 4. Database Setup
-
-### Local SQL Server
+## 4. Database setup
 
 ```bash
 cd server
-
-# Sync the Prisma schema with your local SQL Server
-npx prisma db push
-
-# (Optional) Open Prisma Studio to inspect data
-npx prisma studio
+npx prisma db push      # create tables from prisma/schema.prisma
+npx prisma studio       # optional — browse the data
 ```
 
-### Azure SQL (Production)
+`db push` is fine for development and for standing up a fresh database. For a change
+history you can review and roll back, use `npx prisma migrate dev` instead.
 
-1. Create an **Azure SQL Database** in the Azure Portal (Basic tier is sufficient).
-2. Under **Firewalls and virtual networks**, add your server's IP address.
-3. Copy the **ADO.NET** connection string and convert it to the Prisma URL format:
-   ```
-   sqlserver://<server>.database.windows.net:1433;database=<db>;user=<user>@<server>;password=<pass>;encrypt=true
-   ```
-4. Set it as `DATABASE_URL` in `server/.env`.
-5. Apply the schema:
-
-   **Option A — direct push (dev / staging):**
-   ```bash
-   cd server
-   npx prisma db push
-   ```
-
-   **Option B — generate SQL and apply manually (production):**
-   ```bash
-   npx prisma migrate diff \
-     --from-empty \
-     --to-schema-datamodel prisma/schema.prisma \
-     --script > migration.sql
-   ```
-   Then run `migration.sql` in **Azure Portal → SQL Database → Query editor**.
-
-> `prisma migrate dev` is not supported on Azure SQL (requires shadow database permissions). Use `db push` or the manual SQL approach above.
+There is no seed script. Create the first account through the signup screen — the first
+user to create a workspace becomes its owner.
 
 ---
 
-## 5. Production Build
+## 5. Deploying
 
-### Build the React frontend
+### Database — Neon
 
-```bash
-cd client
-npm run build
-# Output → client/dist/
+Create a project, copy the connection string into `DATABASE_URL`, then run
+`npx prisma db push` once from your machine against it.
+
+Any managed PostgreSQL works: Supabase, Railway, RDS, or your own server.
+
+### API — Render
+
+New **Web Service**, pointed at this repository.
+
+| Setting | Value |
+|---|---|
+| Root Directory | `server` |
+| Build Command | `npm install && npx prisma generate` |
+| Start Command | `npm start` |
+
+Add every variable from §2 **except** `PORT` — Render assigns that, and setting it
+yourself will break port detection.
+
+Put the database and the API in the same region. A cross-region hop adds ~60 ms to
+every query.
+
+### Web — Vercel
+
+Import the same repository.
+
+| Setting | Value |
+|---|---|
+| Root Directory | `client` |
+| Framework Preset | Vite |
+| Build Command | `npm run build` |
+| Output Directory | `dist` |
+
+Environment variables:
+
+```
+VITE_API_URL=https://your-api-host
+VITE_WS_URL=https://your-api-host
 ```
 
-### (Optional) Serve frontend from Express
+[`client/vercel.json`](client/vercel.json) rewrites all paths to `index.html`. Without it
+every route except `/` returns 404 on a hard load — see §7.
 
-Add this to `server/src/index.js` **after** all API routes:
+### Connect the two
 
-```js
-const path = require('path');
-app.use(express.static(path.join(__dirname, '../../client/dist')));
-app.get('*', (_req, res) =>
-  res.sendFile(path.join(__dirname, '../../client/dist/index.html'))
-);
+Back in the API host, set both to the deployed web origin:
+
+```
+CLIENT_URL=https://your-web-host
+ALLOWED_ORIGINS=https://your-web-host
 ```
 
-When using this approach, leave `VITE_API_URL` empty in `client/.env` so the client hits the same origin as the server.
+`ALLOWED_ORIGINS` drives CORS and the Socket.IO handshake. `CLIENT_URL` builds the links
+inside emails. Miss either and the app loads but nothing works.
 
 ---
 
-## 6. Deployment Options
+## 6. Post-deployment checklist
+
+- [ ] `GET /api/leads` returns `401` — the API is up and auth middleware is running
+- [ ] Browser console shows no CORS errors on the login page
+- [ ] Signup delivers a code, and the code signs you in
+- [ ] The live badge in the bottom-right reads **Live**, not **Connecting** — Socket.IO is through
+- [ ] Creating a lead in one browser appears in another without a refresh
+- [ ] Loading a deep link such as `/analytics` directly returns the app, not a 404
+- [ ] `JWT_SECRET`, `JWT_REFRESH_SECRET`, and `API_KEY` are freshly generated, not copied from an example
+- [ ] No `.env` file is committed — `git log --all --name-only | grep '\.env$'` returns nothing
 
 ---
 
-### Option A — Single VPS / Ubuntu Server (Nginx)
+## 7. Troubleshooting
 
-Best for: full control, on-premises SQL Server, custom domains.
+**Login hangs, then fails with `Connection timeout`.**
+The host blocks outbound SMTP. Render's free tier blocks ports 25, 465, and 587. Set
+`BREVO_API_KEY` to deliver over HTTPS instead — [`emailService.js`](server/src/services/emailService.js)
+picks the transport automatically and falls back to SMTP when the key is absent.
 
-#### 1. Provision the server
+**Every route except `/` returns 404 after deploying the frontend.**
+The host is looking for files that do not exist; client-side routes only exist in the
+browser. `client/vercel.json` handles this on Vercel. On Netlify use a `_redirects` file
+with `/* /index.html 200`; on Nginx use `try_files $uri /index.html`.
 
-- Ubuntu 22.04 VPS (DigitalOcean, Hetzner, Linode, etc.)
-- Open ports: `22` (SSH), `80` (HTTP), `443` (HTTPS)
+**CORS errors in the browser console.**
+`ALLOWED_ORIGINS` must contain the exact frontend origin — scheme included, no trailing
+slash. It accepts a comma-separated list.
 
-#### 2. Install Node.js
+**The live badge stays on `Connecting`.**
+The Socket.IO handshake is failing. Either the JWT is stale (rotating `JWT_SECRET`
+invalidates every issued token — clear `localStorage` and sign in again) or the origin is
+missing from `ALLOWED_ORIGINS`.
 
-```bash
-curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-sudo apt-get install -y nodejs
-```
+**Emails send but land in spam.**
+Authenticate your sending domain with the provider (SPF and DKIM). A single verified
+sender on a free mailbox domain works for testing but will be filtered in bulk.
 
-#### 3. Clone and install
+**First request after a quiet period takes ~50 seconds.**
+Free tiers idle the instance. Not a bug. Upgrade the plan, or accept the cold start.
 
-```bash
-git clone <repo-url> /var/www/democrm
-cd /var/www/democrm
-
-cd server && npm install --omit=dev
-cd ../client && npm install && npm run build
-```
-
-#### 4. Configure environment
-
-```bash
-nano /var/www/democrm/server/.env
-# Paste and fill in your production values
-```
-
-#### 5. Push the Prisma schema
-
-```bash
-cd /var/www/democrm/server
-npx prisma db push
-```
-
-#### 6. Run with PM2
-
-```bash
-sudo npm install -g pm2
-
-cd /var/www/democrm/server
-pm2 start src/index.js --name democrm-api
-
-pm2 save
-pm2 startup   # follow the printed command to enable on boot
-```
-
-#### 7. Nginx reverse proxy
-
-```bash
-sudo apt install nginx -y
-sudo nano /etc/nginx/sites-available/democrm
-```
-
-```nginx
-server {
-    listen 80;
-    server_name your-domain.com www.your-domain.com;
-
-    # Serve React SPA
-    root /var/www/democrm/client/dist;
-    index index.html;
-
-    location / {
-        try_files $uri $uri/ /index.html;
-    }
-
-    # Proxy API requests to Express
-    location /api {
-        proxy_pass http://localhost:5003;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_cache_bypass $http_upgrade;
-    }
-
-    # Proxy Socket.IO (WebSocket upgrade required)
-    location /socket.io {
-        proxy_pass http://localhost:5003;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-    }
-}
-```
-
-```bash
-sudo ln -s /etc/nginx/sites-available/democrm /etc/nginx/sites-enabled/
-sudo nginx -t
-sudo systemctl reload nginx
-```
-
-#### 8. SSL with Let's Encrypt
-
-```bash
-sudo apt install certbot python3-certbot-nginx -y
-sudo certbot --nginx -d your-domain.com -d www.your-domain.com
-```
+**`prisma generate` fails on the host.**
+`prisma` is a devDependency. If the host installs production dependencies only, either
+move it into `dependencies` or set `NPM_CONFIG_PRODUCTION=false`.
 
 ---
 
-### Option B — Railway
-
-Best for: fast setup, automatic deploys, no server management.
-
-1. Push the repo to GitHub.
-2. Go to [railway.app](https://railway.app) → **New Project** → **Deploy from GitHub repo**.
-3. Create **two services** from the same repo:
-   - **Backend service**: root directory `server/`, start command `npm start`.
-   - **Frontend service**: root directory `client/`, build command `npm run build`, publish directory `dist`.
-4. Add all `server/.env` variables to the backend service's **Variables** tab.
-5. Set `CLIENT_URL` and `ALLOWED_ORIGINS` to the Railway-assigned frontend URL.
-6. Set `VITE_API_URL` and `VITE_WS_URL` to the Railway-assigned backend URL in the frontend service variables.
-7. After first deploy, apply the schema via Railway's shell:
-   ```bash
-   npx prisma db push
-   ```
-
-Railway auto-assigns HTTPS domains for each service.
-
----
-
-### Option C — Render
-
-1. Push the repo to GitHub.
-2. **Backend**: New **Web Service** → root `server/` → build command `npm install` → start command `npm start`.
-3. **Frontend**: New **Static Site** → root `client/` → build command `npm run build` → publish directory `dist`.
-4. Add environment variables under each service's **Environment** tab.
-5. Render supports Socket.IO out of the box over HTTP/1.1.
-6. After the first deploy, run `npx prisma db push` via the Render shell.
-
----
-
-### Option D — Vercel (Frontend) + Railway (Backend)
-
-Best for: globally distributed frontend CDN + managed backend.
-
-#### Frontend on Vercel
-
-1. Import the repo in Vercel → set **Root Directory** to `client`.
-2. Framework preset: **Vite**.
-3. Add environment variables:
-   - `VITE_API_URL=https://<your-railway-backend>.railway.app`
-   - `VITE_WS_URL=https://<your-railway-backend>.railway.app`
-4. Deploy.
-
-#### Backend on Railway
-
-Follow Option B backend steps. Set `CLIENT_URL` and `ALLOWED_ORIGINS` to your Vercel deployment URL (exact origin, no trailing slash).
-
----
-
-## 7. Post-Deployment Checklist
-
-- [ ] `JWT_SECRET` and `JWT_REFRESH_SECRET` are strong unique secrets (not the defaults)
-- [ ] `CLIENT_URL` and `ALLOWED_ORIGINS` match the exact deployed frontend origin (no trailing slash)
-- [ ] `DATABASE_URL` points to the production SQL Server / Azure SQL with correct credentials
-- [ ] Prisma schema has been applied to the production database (`db push` or manual SQL)
-- [ ] `NODE_ENV=production` is set on the server
-- [ ] SMTP credentials are valid — test by triggering a **Forgot Password** email
-- [ ] Password reset email link points to the production frontend (not localhost)
-- [ ] Ownership transfer OTP email is received successfully
-- [ ] HTTPS is enabled on both frontend and backend
-- [ ] Health check responds: `GET /api/health` → `{ status: 'ok' }`
-- [ ] Socket.IO real-time updates are working in the dashboard
-- [ ] Rate limiting is active on `/api/public/leads` (10 req/min per IP)
-- [ ] Compliance logs are preserved after lead deletion — verify in the **Logs** page
-- [ ] Azure SQL firewall allows connections from your production server IP
-
----
-
-## 8. Troubleshooting
-
-### CORS errors in the browser
-
-`ALLOWED_ORIGINS` in `server/.env` must exactly match the frontend origin (protocol + domain + port, no trailing slash). Restart the server after any `.env` change.
-
-### Password reset / OTP email links point to localhost
-
-`CLIENT_URL` in `server/.env` must be set to the production frontend URL. Both forgot-password reset links and ownership transfer OTP emails use this value to build the link.
-
-### Socket.IO fails to connect
-
-- Confirm `/socket.io` is proxied correctly in Nginx (WebSocket upgrade headers must be set).
-- `VITE_WS_URL` in `client/.env` must point to the backend server.
-- If `VITE_WS_URL` is not set, the client falls back to `window.location.host` — this works when the frontend and backend share the same domain.
-
-### Prisma: `prisma migrate dev` fails on Azure SQL
-
-Azure SQL does not allow creating a shadow database. Use `npx prisma db push` for dev/staging, or generate SQL with `prisma migrate diff` and apply it manually for production.
-
-### Prisma: Foreign key constraint on lead delete
-
-`leadService.js` handles this by deleting `LeadNote` records first and setting `ActivityLog.leadId = null` to preserve compliance logs. Ensure you are running the latest version of `leadService.js`.
-
-### Prisma: Unique constraint on lead create
-
-The `leadId` generator uses the MAX of existing IDs, not COUNT, so deleting leads never causes duplicate `LD####` collisions. Ensure you are running the latest `generateLeadId` function in `leadService.js`.
-
-### `npm run build` fails on client
-
-```bash
-cd client
-rm -rf node_modules
-npm install
-npm run build
-```
-
-### PM2 process crashes on startup
-
-```bash
-pm2 logs democrm-api
-```
-
-Check the log output for missing environment variables or port conflicts.
-
-### Port 5003 already in use
-
-```bash
-# Linux / macOS
-lsof -ti:5003 | xargs kill -9
-
-# Windows
-netstat -ano | findstr :5003
-taskkill /PID <pid> /F
-```
-
----
-
-*Mini CRM — Node.js + Express + Prisma + Azure SQL Server + React + Vite + Socket.IO*
+*Node.js · Express · Prisma · PostgreSQL · React · Vite · Socket.IO*

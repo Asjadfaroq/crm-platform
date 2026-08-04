@@ -44,7 +44,7 @@ Mini CRM is a multi-tenant CRM built for small sales teams. Each user can belong
 |---|---|
 | Node.js + Express | HTTP server and REST API |
 | Prisma ORM | Database access layer |
-| Azure SQL Server (MSSQL) | Relational database |
+| PostgreSQL | Relational database |
 | Socket.IO | Real-time WebSocket events |
 | JSON Web Tokens (JWT) | Authentication |
 | bcryptjs | Password hashing |
@@ -111,7 +111,7 @@ democrm/
 │
 └── server/                          # Express backend
     ├── prisma/
-    │   └── schema.prisma            # Prisma schema (Azure SQL Server)
+    │   └── schema.prisma            # Prisma schema (PostgreSQL)
     └── src/
         ├── index.js                 # App entry point, Socket.IO setup, CORS config
         ├── config/
@@ -216,8 +216,8 @@ democrm/
 ### Prerequisites
 
 - Node.js 18+
-- SQL Server (local or Azure SQL)
-- An SMTP account for email (Office365 or equivalent)
+- PostgreSQL 14+ (local, Docker, or a hosted provider such as Neon)
+- A transactional email account (Brevo, Postmark, SendGrid, or any SMTP host)
 
 ### Environment Variables
 
@@ -226,8 +226,8 @@ democrm/
 ```env
 PORT=5003
 
-# Prisma / Azure SQL Server
-DATABASE_URL=sqlserver://<host>:1433;database=<dbname>;user=<user>;password=<pass>;trustServerCertificate=true;encrypt=false
+# Prisma / PostgreSQL
+DATABASE_URL=postgresql://<user>:<password>@<host>:5432/<database>?sslmode=require
 
 # JWT
 JWT_SECRET=replace_with_a_long_random_string
@@ -242,12 +242,23 @@ CLIENT_URL=http://localhost:5173
 # CORS — comma-separated list of allowed frontend origins
 ALLOWED_ORIGINS=http://localhost:5173,http://localhost:3000
 
-# SMTP (Office365 example)
-SMTP_SERVICE=smtp.office365.com
+# SMTP (Brevo example)
+SMTP_SERVICE=smtp-relay.brevo.com
 SMTP_PORT=587
-SMTP_MAIL=yourmail@example.com
-SMTP_PASSWORD=yourpassword
 SMTP_SECURE=false
+SMTP_MAIL=your_smtp_login
+SMTP_PASSWORD=your_smtp_key
+
+# Sender address shown to recipients. Must be verified with your provider.
+SMTP_FROM=you@example.com
+
+# Optional. Set on hosts that block outbound SMTP (e.g. Render's free tier) to
+# deliver over HTTPS instead. When unset, the SMTP transport above is used.
+BREVO_API_KEY=
+
+# Optional branding
+APP_NAME=Mini CRM
+SUPPORT_EMAIL=
 ```
 
 **`client/.env`**
@@ -293,18 +304,16 @@ The API runs at `http://localhost:5003` and the frontend at `http://localhost:51
 ```bash
 cd server
 
-# Push the Prisma schema to your SQL Server database
+# Push the Prisma schema to your database
 npx prisma db push
 
 # (Optional) Open Prisma Studio to inspect data
 npx prisma studio
 ```
 
-> For production schema changes, generate a SQL diff:
-> ```bash
-> npx prisma migrate diff --from-empty --to-schema-datamodel prisma/schema.prisma --script
-> ```
-> Then run the output SQL manually in Azure Portal → Query editor.
+> `db push` is the quickest way to get a schema in place. For a change history you
+> can review and roll back, use `npx prisma migrate dev` instead — PostgreSQL supports
+> the shadow database it needs.
 
 ---
 
@@ -586,8 +595,11 @@ cd server && npx prisma db push
 # Open Prisma Studio (database GUI)
 cd server && npx prisma studio
 
-# Start backend in development mode (nodemon)
+# Start backend in watch mode (node --watch)
 cd server && npm run dev
+
+# Start backend in production mode
+cd server && npm start
 
 # Start frontend in development mode
 cd client && npm run dev

@@ -26,8 +26,7 @@ if (process.env.NODE_ENV === 'production' && process.env.CLIENT_URL?.includes('l
 const httpServer = http.createServer(app);
 
 // Parse allowed origins from env (comma-separated)
-// Dev:  ALLOWED_ORIGINS=http://localhost:5173,http://localhost:3000
-// Prod: ALLOWED_ORIGINS=https://admin.sehainvestment.com,https://crm.sehainvestment.com
+// Comma-separated. Dev: http://localhost:5173  Prod: your deployed frontend origin.
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || process.env.CLIENT_URL || "http://localhost:5173")
   .split(",")
   .map((o) => o.trim())
