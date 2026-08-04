@@ -1,0 +1,83 @@
+# ===============================
+# Node Modules
+# ===============================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+yarn.lock
+pnpm-lock.yaml
+
+# ===============================
+# Environment Variables
+# ===============================
+.env
+.env.*
+!.env.example
+
+# ===============================
+# Build Folders
+# ===============================
+dist/
+build/
+client/dist/
+server/dist/
+
+# ===============================
+# Logs
+# ===============================
+logs
+*.log
+
+# ===============================
+# OS Files
+# ===============================
+.DS_Store
+Thumbs.db
+
+# ===============================
+# IDE / Editor
+# ===============================
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ===============================
+# Coverage & Testing
+# ===============================
+coverage/
+.nyc_output/
+
+# ===============================
+# MongoDB Local Files
+# ===============================
+data/
+dump/
+
+# ===============================
+# PM2
+# ===============================
+.pm2/
+
+# ===============================
+# Temporary Files
+# ===============================
+tmp/
+temp/
+*.tmp
+
+# ===============================
+# Runtime files
+# ===============================
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# ===============================
+# Optional: Ignore uploads folder
+# (Uncomment if you store user uploads locally)
+# ===============================
+# uploads/

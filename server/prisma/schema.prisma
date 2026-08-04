@@ -1,0 +1,172 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                 Int       @id @default(autoincrement())
+  name               String    @db.VarChar(100)
+  email              String    @unique @db.VarChar(255)
+  password           String    @db.VarChar(255)
+  isActive           Boolean   @default(true)
+  activeSessionToken String?   @db.Text
+  otp                String?   @db.VarChar(10)
+  otpExpiry          DateTime?
+  isEmailVerified    Boolean   @default(false)
+  resetToken         String?   @db.VarChar(255)
+  resetTokenExpiry   DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  ownedWorkspaces      Workspace[]       @relation("WorkspaceOwner")
+  workspaceMemberships WorkspaceMember[]
+  assignedLeads        Lead[]            @relation("AssignedLeads")
+  notes                LeadNote[]
+  activityLogs         ActivityLog[]
+
+  @@map("users")
+}
+
+model Workspace {
+  id                 Int       @id @default(autoincrement())
+  name               String    @db.VarChar(100)
+  slug               String    @unique @db.VarChar(120)
+  ownerId            Int
+  apiKey             String    @unique @db.VarChar(50)
+  webhookUrl         String?   @db.VarChar(500)
+  transferOtp        String?   @db.VarChar(10)
+  transferOtpExpiry  DateTime?
+  transferToUserId   Int?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  owner        User              @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  members      WorkspaceMember[]
+  leads        Lead[]
+  deletedLeads DeletedLead[]
+  activityLogs ActivityLog[]
+
+  @@map("workspaces")
+}
+
+// role values: admin | editor | viewer
+model WorkspaceMember {
+  id          Int    @id @default(autoincrement())
+  workspaceId Int
+  userId      Int
+  role        String @default("viewer") @db.VarChar(20)
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  user      User      @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([workspaceId, userId])
+  @@map("workspace_members")
+}
+
+// status: New | Contacted | In Progress | Closed | Rejected
+// priority: Low | Medium | High | Urgent
+// dipAccount: pending | created
+model Lead {
+  id             Int       @id @default(autoincrement())
+  workspaceId    Int
+  leadId         String?   @db.VarChar(100)
+  name           String    @db.VarChar(200)
+  mobile         String    @db.VarChar(50)
+  amount         String    @db.VarChar(100)
+  sourceLink     String?   @db.VarChar(500)
+  status         String    @default("New") @db.VarChar(20)
+  priority       String    @default("Medium") @db.VarChar(20)
+  assignedTo     Int?
+  nextFollowup   DateTime?
+  dipAccount     String    @default("pending") @db.VarChar(20)
+  verifiedMobile Boolean   @default(false)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  workspace    Workspace   @relation(fields: [workspaceId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  assignedUser User?       @relation("AssignedLeads", fields: [assignedTo], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  notes        LeadNote[]
+  activityLogs ActivityLog[]
+
+  @@unique([workspaceId, leadId])
+  @@index([workspaceId, status])
+  @@index([workspaceId, priority])
+  @@index([workspaceId, assignedTo])
+  @@index([workspaceId, createdAt])
+  @@map("leads")
+}
+
+model LeadNote {
+  id        Int      @id @default(autoincrement())
+  leadId    Int
+  text      String   @db.Text
+  addedBy   Int?
+  createdAt DateTime @default(now())
+
+  lead        Lead  @relation(fields: [leadId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  addedByUser User? @relation(fields: [addedBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@map("lead_notes")
+}
+
+// actionType values: Lead Created | Lead Assigned | Status Changed | Priority Changed |
+//   Note Added | Lead Updated | Lead Deleted | DIP Account Changed |
+//   Next Followup Changed | Mobile Verified | Member Invited | Member Removed | Role Changed
+// Soft-deleted leads — copied here on delete, restored back to leads on restore.
+// leadId (e.g. LD0004) is permanently reserved — generateLeadId checks this table.
+model DeletedLead {
+  id              Int       @id @default(autoincrement())
+  workspaceId     Int
+  leadId          String    @db.VarChar(100)
+  name            String    @db.VarChar(200)
+  mobile          String    @db.VarChar(50)
+  amount          String    @db.VarChar(100)
+  sourceLink      String?   @db.VarChar(500)
+  status          String    @db.VarChar(20)
+  priority        String    @db.VarChar(20)
+  assignedTo      Int?
+  nextFollowup    DateTime?
+  dipAccount      String    @db.VarChar(20)
+  verifiedMobile  Boolean   @default(false)
+  notesJson       String?   @db.Text  // JSON snapshot of lead_notes at deletion time
+  originalCreatedAt DateTime
+  deletedAt       DateTime  @default(now())
+  deletedBy       Int?
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([workspaceId])
+  @@index([leadId])
+  @@map("deleted_leads")
+}
+
+// actionType values: Lead Created | Lead Assigned | Status Changed | Priority Changed |
+//   Note Added | Lead Updated | Lead Deleted | Lead Restored | DIP Account Changed |
+//   Next Followup Changed | Mobile Verified | Member Invited | Member Removed | Role Changed
+model ActivityLog {
+  id          Int      @id @default(autoincrement())
+  actionType  String   @db.VarChar(50)
+  performedBy Int?
+  leadId      Int?
+  leadRef     String?  @db.VarChar(50)   // human-readable lead number e.g. LD0001 — survives lead deletion
+  workspaceId Int?
+  oldValue    String?  @db.VarChar(500)
+  newValue    String?  @db.VarChar(500)
+  ipAddress   String?  @db.VarChar(50)
+  timestamp   DateTime @default(now())
+
+  lead      Lead?      @relation(fields: [leadId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  performer User?      @relation(fields: [performedBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([leadId])
+  @@index([leadRef])
+  @@index([workspaceId])
+  @@index([performedBy])
+  @@index([timestamp])
+  @@map("activity_logs")
+}
